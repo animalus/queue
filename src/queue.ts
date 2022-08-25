@@ -25,9 +25,9 @@ export class Queue<K, T, R> extends EventEmitter {
     private pending: QueueWorker<T, R>[] = [];
     private jobs: QueueWorker<T, R>[] = [];
 
-    private timers: {} = {};
+    private timers = new Set<any>();
 
-    constructor(private keyGetter: (T) => K, options: QueueOptions) {
+    constructor(private keyGetter: (value: T) => K, options: QueueOptions) {
         super();
 
         this.concurrency = options?.concurrency || 1;
@@ -116,30 +116,30 @@ export class Queue<K, T, R> extends EventEmitter {
             return;
         }
 
-        var job = this.jobs.shift();
+        let job = this.jobs.shift();
+        if (!job) {
+            return;
+        }
 
-        var once = true;
-        var session = this.session;
-        var timeoutId = null;
-        var didTimeout = false;
-        var timeout =
+        let once = true;
+        const session = this.session;
+        let timeoutId: any;
+        let didTimeout = false;
+        const timeout =
             job.timeout === null || job.timeout === undefined
                 ? this.timeout
                 : job.timeout;
 
-        const next = (err?: any, result?: R) => {
+        const next = (err?: any, result?: R | null) => {
             if (once && this.session === session) {
                 once = false;
                 this.pending.shift();
-                if (timeoutId !== null) {
-                    delete this.timers[timeoutId];
-                    clearTimeout(timeoutId);
-                }
+                this.deleteTimer(timeoutId);
 
                 if (err) {
-                    this.emit("error", job.obj, err);
+                    this.emit("error", job?.obj, err);
                 } else if (didTimeout === false) {
-                    this.emit("success", job.obj, result);
+                    this.emit("success", job?.obj, result);
                 }
 
                 if (this.session === session) {
@@ -156,17 +156,17 @@ export class Queue<K, T, R> extends EventEmitter {
             timeoutId = setTimeout(() => {
                 didTimeout = true;
                 if (this.listeners("timeout").length > 0) {
-                    this.emit("timeout", next, job.obj);
+                    this.emit("timeout", next, job?.obj);
                 } else {
                     next();
                 }
             }, timeout);
-            this.timers[timeoutId] = timeoutId;
+            this.timers.add(timeoutId);
         }
 
         this.pending.push(job);
         this.emit("start", job.obj);
-        var promise = job.run();
+        const promise = job.run();
         if (promise) {
             promise
                 .then((result) => {
@@ -182,6 +182,11 @@ export class Queue<K, T, R> extends EventEmitter {
         }
     }
 
+    private deleteTimer(id: string) {
+        this.timers.delete(id);
+        clearTimeout(id);
+    }
+
     done(err?: any) {
         this.session++;
         this.running = false;
@@ -193,10 +198,8 @@ export class Queue<K, T, R> extends EventEmitter {
     }
 
     end(err: any) {
-        for (var key in this.timers) {
-            var timeoutId = this.timers[key];
-            delete this.timers[key];
-            clearTimeout(timeoutId);
+        for (var id in this.timers) {
+            this.deleteTimer(id);
         }
         this.jobs.length = 0;
         this.pending.length = 0;

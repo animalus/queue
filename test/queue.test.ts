@@ -1,4 +1,5 @@
-import { AbstractQueueWorker, Queue, QueueWorkerOptions } from "../src/queue";
+import { Queue } from "../src/queue";
+import { AbstractQueueWorker, QueueWorkerOptions } from "../src/types";
 
 export type QueueThing = {
     duration: number;
@@ -8,7 +9,7 @@ export type QueueThing = {
 };
 
 class JobThing extends AbstractQueueWorker<QueueThing, number> {
-    timer;
+    timer: any;
 
     doWork(): Promise<number> {
         return new Promise<number>((resolve, reject) => {
@@ -39,8 +40,8 @@ var q = new Queue((obj: QueueThing) => obj.id, {
 });
 
 function makeJob(
-    id,
-    duration,
+    id: number,
+    duration: number,
     error: boolean = false,
     cancel: boolean = false,
     options?: QueueWorkerOptions<number>
@@ -94,7 +95,7 @@ q.push(
 q.push(makeJob(4, 5000));
 q.push(
     makeJob(5, 2500, false, false, {
-        resolve: (result: number) => {
+        resolve: (result) => {
             console.log(`Also got result [${result}] from optional resolve.`);
         },
     })

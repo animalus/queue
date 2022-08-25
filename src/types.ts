@@ -6,21 +6,20 @@ export type QueueWorkerOptions<R> = {
 };
 
 export interface QueueWorker<T, R> {
-    timeout: number;
+    timeout: number | undefined;
     obj: T;
-    run(): Promise<R>;
+    run(): Promise<R | null>;
     cancel?(): void;
 }
 
 export abstract class AbstractQueueWorker<T, R> implements QueueWorker<T, R> {
-    private reject: (reason?: any) => void;
-    private promise: Promise<R>;
+    private reject?: (reason?: any) => void;
+    private promise?: Promise<R | null>;
 
     constructor(public obj: T, private options?: QueueWorkerOptions<R>) {}
 
     abstract doWork(): Promise<R>;
-
-    run(): Promise<R> {
+    run(): Promise<R | null> {
         const promise = new Promise<R>((resolve, reject) => {
             this.reject = reject;
 
@@ -56,16 +55,16 @@ export abstract class AbstractQueueWorker<T, R> implements QueueWorker<T, R> {
         if (this.options?.reject) {
             this.options?.reject(err);
         }
-        this.reject(err);
+        this.reject?.(err);
     }
 
     cancel() {
         if (this.options?.cancel) {
             this.options.cancel();
         }
-        if (this.promise && this.promise["cancel"]) {
-            this.promise["cancel"]();
-        }
+        // if (this.promise && this.promise["cancel"]) {
+        //     this.promise["cancel"]();
+        // }
         this.callReject({ canceled: true });
     }
 }

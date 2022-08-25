@@ -7,7 +7,7 @@
         "test": "test"
     },
     "scripts": {
-        "node:test": "",
+        "node:test": "npx ts-node test/queue.test.ts",
         "test": "echo \"Error: no test specified\" && exit 1"
     },
     "repository": {
@@ -21,6 +21,10 @@
     },
     "homepage": "https://github.com/animalus/queue#readme",
     "devDependencies": {
+        "@tsconfig/node16": "^1.0.3",
+        "@types/events": "^3.0.0",
+        "@types/node": "^18.7.13",
+        "ts-node": "^10.9.1",
         "typescript": "^4.7.4"
     }
 }
