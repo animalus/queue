@@ -1,0 +1,26 @@
+{
+    "name": "queue",
+    "version": "1.0.0",
+    "description": "One queue for both node and browser",
+    "main": "src/index.ts",
+    "directories": {
+        "test": "test"
+    },
+    "scripts": {
+        "node:test": "",
+        "test": "echo \"Error: no test specified\" && exit 1"
+    },
+    "repository": {
+        "type": "git",
+        "url": "git+https://github.com/animalus/queue.git"
+    },
+    "author": "",
+    "license": "MIT",
+    "bugs": {
+        "url": "https://github.com/animalus/queue/issues"
+    },
+    "homepage": "https://github.com/animalus/queue#readme",
+    "devDependencies": {
+        "typescript": "^4.7.4"
+    }
+}
