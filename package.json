@@ -1,5 +1,5 @@
 {
-    "name": "queue",
+    "name": "@animalus/queue",
     "version": "1.0.0",
     "description": "One queue for both node and browser",
     "main": "src/index.ts",
