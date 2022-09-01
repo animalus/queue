@@ -1,28 +1,23 @@
-//
-// NOTE: This code was converted to typescript from the npm module "queue".
-// I also removed stuff that I wasn't using and cleaned up some things I had issues with
-// AND expanded it to allow the storage of the objects on the queue. The queue items (QueueWorkers)
-// have an input and output type, T and R respectively. This allows you to see what objects
-// are in the queue and to remove them if desired.
-//
 import { EventEmitter } from "events";
 
-import { QueueActivity, QueueOptions, QueueWorker } from "./types";
+import {
+    CANCELED,
+    EVENT_STATUS,
+    QueueActivity,
+    QueueOptions,
+    QueueWorker,
+    QueueWorkerOptions,
+    QueueWorkerStatus,
+    Runnable,
+} from "./types";
 
-//
-// TODO: Replace EventEmitter with the native EventTarget (since node 15) so that it can be used in
-// both Node and the browser? Actually, I'm not positive events module won't work in the browser but
-// I do know there are native browser implementations of EventTarget as well. So switching to that
-// will use native code in both and avoid this import and the import of @types/events.
-//
-export class Queue<K, T, R> extends EventEmitter {
+export class Queue<K, T extends Runnable<R>, R> extends EventEmitter {
     private concurrency: number = 1;
     private timeout: number = 0;
-    private autostart: boolean = true;
-    private session: number = 0;
     private running: boolean = false;
 
-    private pending: QueueWorker<T, R>[] = [];
+    private pending: Map<K, QueueWorker<T, R>> = new Map();
+    private queued: Set<K> = new Set();
     private jobs: QueueWorker<T, R>[] = [];
 
     private timers = new Set<any>();
@@ -32,69 +27,95 @@ export class Queue<K, T, R> extends EventEmitter {
 
         this.concurrency = options?.concurrency || 1;
         this.timeout = options?.timeout || 0;
-        this.autostart =
+        this.running =
             options.autostart === null || options.autostart === undefined
                 ? true
                 : options.autostart;
     }
 
-    push(job: QueueWorker<T, R>) {
-        const result = this.jobs.push(job);
+    public pushp(obj: T, options?: QueueWorkerOptions) {
+        const job = new QueueWorker<T, R>(obj, options, this.timeout);
+
+        this.jobs.push(job);
+        this.queued.add(this.getKey(obj));
 
         //
-        // NOTE: emit this BEFORE start() method because that might immediately
+        // NOTE: emit this BEFORE next() method because that might immediately
         // emit a "start" event and we want to make sure that the queue event comes
         // before the start event.
         //
-        this.emit("queued", job.obj, this.jobs.length);
+        this.emit(EVENT_STATUS, QueueWorkerStatus.QUEUED, job.obj);
 
-        if (this.autostart) {
-            this.start();
-        }
-        return result;
+        this._next();
+
+        return job.promise;
     }
 
-    getActivity() {
+    public push(obj: T, options?: QueueWorkerOptions) {
+        this.pushp(obj, options).catch((err: any) => {
+            //
+            // Here to catch the exception and avoid the uncaught exception error that
+            // might result. But also we need to check to see if we are here because
+            // an unstarted queued job was canceled and announce that.
+            //
+            if (
+                !this.pending.has(this.getKey(obj)) &&
+                err?.message === CANCELED
+            ) {
+                this.emit(EVENT_STATUS, QueueWorkerStatus.CANCELED, obj);
+            }
+        });
+    }
+
+    getActivity<M>(mapper: (value: T) => M) {
+        const activity = this.activity;
         return {
-            pending: [...this.pending.map((job) => job.obj)],
-            queued: [...this.jobs.map((job) => job.obj)],
+            pending: activity.pending.map(mapper),
+            queued: activity.queued.map(mapper),
+        } as QueueActivity<M>;
+    }
+
+    get activity() {
+        return {
+            pending:
+                this.pending.size > 0
+                    ? Array.from(this.pending.values()).map((job) => job.obj)
+                    : [],
+            queued: this.jobs.map((job) => job.obj),
         } as QueueActivity<T>;
     }
 
-    private isJob(key: K, job: QueueWorker<T, R>) {
-        return this.keyGetter(job.obj) == key;
+    private getKey(obj: T) {
+        return this.keyGetter(obj);
     }
 
-    isQueued(key: K) {
-        for (const job of this.jobs) {
-            if (this.isJob(key, job)) {
-                return true;
-            }
-        }
-        return false;
+    private isJob(key: K, job: QueueWorker<T, R>) {
+        return this.getKey(job.obj) === key;
+    }
+
+    has(key: K) {
+        return this.queued.has(key);
     }
 
     cancel(key: K) {
-        for (let ii = 0; ii < this.pending.length; ii++) {
-            const job = this.pending[ii];
-            if (this.isJob(key, job)) {
-                this.pending.splice(ii, 1);
-
-                //
-                // Cass this after splicing the array so that the system can move
-                // on to the next without worrying about waiting for a cancel to complete.
-                //
-                if (job.cancel) {
-                    job.cancel();
-                }
-                return job.obj;
-            }
+        //
+        // Look for job in pending ...
+        //
+        const job = this.pending.get(key);
+        if (job) {
+            job.cancel();
+            return job.obj;
         }
 
+        //
+        // Now look in queued.
+        //
         for (let ii = 0; ii < this.jobs.length; ii++) {
             const job = this.jobs[ii];
             if (this.isJob(key, job)) {
                 this.jobs.splice(ii, 1);
+                this.queued.delete(key);
+                job.cancel();
                 return job.obj;
             }
         }
@@ -102,107 +123,103 @@ export class Queue<K, T, R> extends EventEmitter {
         return null;
     }
 
+    private _finished(key: K, timeoutId: any) {
+        this.pending.delete(key);
+        this.queued.delete(key);
+        this.timers.delete(timeoutId);
+        clearTimeout(timeoutId);
+    }
+
     start() {
         this.running = true;
+        this._next();
+    }
 
-        if (this.pending.length >= this.concurrency) {
+    private _next() {
+        if (!this.running || this.pending.size >= this.concurrency) {
             return;
         }
-
-        if (this.jobs.length === 0) {
-            if (this.pending.length === 0) {
-                this.done();
-            }
-            return;
-        }
-
-        let job = this.jobs.shift();
+        const job = this.jobs.shift();
         if (!job) {
             return;
         }
 
-        let once = true;
-        const session = this.session;
-        let timeoutId: any;
-        let didTimeout = false;
-        const timeout =
-            job.timeout === null || job.timeout === undefined
-                ? this.timeout
-                : job.timeout;
+        const key = this.getKey(job.obj);
+        this.pending.set(key, job);
 
-        const next = (err?: any, result?: R | null) => {
-            if (once && this.session === session) {
-                once = false;
-                this.pending.shift();
-                this.deleteTimer(timeoutId);
-
-                if (err) {
-                    this.emit("error", job?.obj, err);
-                } else if (didTimeout === false) {
-                    this.emit("success", job?.obj, result);
+        if (job.timeout > 0) {
+            job.timeoutId = setTimeout(() => {
+                //
+                // In case this timeout didn't get canceled upon completion or error
+                // let's check to make sure we don't accidentally call a timeout on it as well.
+                // We do this by checking to see if this job is still pending.
+                //
+                if (this.pending.has(key)) {
+                    this._finished(key, job.timeoutId);
+                    this.emit(
+                        EVENT_STATUS,
+                        QueueWorkerStatus.TIMEDOUT,
+                        job.obj
+                    );
+                    this._next();
+                    // } else {
+                    //     console.log(
+                    //         "Could not finding pending.",
+                    //         key,
+                    //         this.pending
+                    //     );
                 }
+            }, job.timeout);
+            this.timers.add(job.timeoutId);
+        }
 
-                if (this.session === session) {
-                    if (this.pending.length === 0 && this.jobs.length === 0) {
-                        this.done();
-                    } else if (this.running) {
-                        this.start();
+        this.emit(EVENT_STATUS, QueueWorkerStatus.IN_PROGRESS, job.obj);
+
+        job.run()
+            .then((result) => {
+                if (this.pending.has(key)) {
+                    this._finished(key, job.timeoutId);
+                    this.emit(
+                        EVENT_STATUS,
+                        QueueWorkerStatus.FINISHED,
+                        job.obj,
+                        result
+                    );
+                }
+            })
+            .catch((err) => {
+                if (this.pending.has(key)) {
+                    this._finished(key, job.timeoutId);
+                    if (err?.message === CANCELED) {
+                        this.emit(
+                            EVENT_STATUS,
+                            QueueWorkerStatus.CANCELED,
+                            job.obj
+                        );
+                    } else {
+                        this.emit(
+                            EVENT_STATUS,
+                            QueueWorkerStatus.FINISHED,
+                            job.obj,
+                            null,
+                            err
+                        );
                     }
                 }
-            }
-        };
+            })
+            .finally(() => {
+                this._next();
+            });
 
-        if (timeout > 0) {
-            timeoutId = setTimeout(() => {
-                didTimeout = true;
-                if (this.listeners("timeout").length > 0) {
-                    this.emit("timeout", next, job?.obj);
-                } else {
-                    next();
-                }
-            }, timeout);
-            this.timers.add(timeoutId);
-        }
-
-        this.pending.push(job);
-        this.emit("start", job.obj);
-        const promise = job.run();
-        if (promise) {
-            promise
-                .then((result) => {
-                    return next(null, result);
-                })
-                .catch((err) => {
-                    return next(err || true);
-                });
-        }
-
-        if (this.running && this.jobs.length > 0) {
-            this.start();
-        }
-    }
-
-    private deleteTimer(id: string) {
-        this.timers.delete(id);
-        clearTimeout(id);
-    }
-
-    done(err?: any) {
-        this.session++;
-        this.running = false;
-        this.emit("end", err);
+        //
+        // Basically for when we start and we need to build up to the number of concurrent
+        // jobs running simultaneously. This will automatically stop running the next job
+        // once concurrency is hit.
+        //
+        this._next();
     }
 
     stop() {
         this.running = false;
-    }
-
-    end(err: any) {
-        for (var id in this.timers) {
-            this.deleteTimer(id);
-        }
-        this.jobs.length = 0;
-        this.pending.length = 0;
-        this.done(err);
     }
 }

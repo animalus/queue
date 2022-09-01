@@ -7,7 +7,7 @@
         "test": "test"
     },
     "scripts": {
-        "node:test": "npx ts-node test/queue.test.ts",
+        "example": "npx ts-node example",
         "compile": "npx tsc",
         "test": "echo \"Error: no test specified\" && exit 1"
     },
