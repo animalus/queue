@@ -4,6 +4,20 @@ I started this from the source code of [queue](https://www.npmjs.com/package/que
 
 There are also no 3rd-party dependencies here outside of the devDependencies.
 
+## Build
+
+```sh
+npm run prepare
+```
+
+## Publish
+
+Update the version in package.json and the run. You will be asked for a one-time password that you need to use the Authy app on your phone to get.
+
+```sh
+npm publish
+```
+
 ## Example/Test
 
 `npm run example`
